@@ -1,0 +1,30 @@
+{
+  "name": "matrix-viz",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "esbuild src/math/matrix.ts src/math/eigen.ts --outdir=.test-build --format=esm --bundle --external:ml-matrix --log-level=warning && node tests/math.test.mjs",
+    "shots": "node scripts/screenshot.mjs",
+    "check:dev": "node scripts/dev-check.mjs"
+  },
+  "dependencies": {
+    "ml-matrix": "^3.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "puppeteer-core": "^25.12.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
