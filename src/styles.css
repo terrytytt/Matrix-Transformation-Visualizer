@@ -184,6 +184,11 @@ pre {
   color: #8ea3c0;
 }
 
+/* Math variables keep their case inside all-caps titles: "VECTOR x". */
+.card-title .mono {
+  text-transform: none;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -221,6 +226,16 @@ pre {
   background: rgba(248, 113, 113, 0.16);
   color: #fca5a5;
   border-color: rgba(248, 113, 113, 0.4);
+}
+.badge-pos {
+  background: rgba(74, 222, 128, 0.16);
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.4);
+}
+.badge-amber {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.4);
 }
 
 /* ------------------------------------------------------------------ */
@@ -315,7 +330,7 @@ pre {
 
 .segmented {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
 }
 
@@ -434,6 +449,20 @@ pre {
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin-top: 10px;
+}
+
+/* Factorization demos have four stages (I → … → A). */
+.steps.steps-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.steps.steps-4 .step {
+  padding: 8px 2px;
+  font-size: 11.5px;
+}
+
+.steps.steps-4 .step-index {
+  margin-right: 2px;
 }
 
 .step {
@@ -782,6 +811,372 @@ pre {
 }
 
 /* ------------------------------------------------------------------ */
+/* Reorganized panels: chips, sub-heads, expanders, nav, legend overlay */
+/* ------------------------------------------------------------------ */
+
+/* Demo chips in the left Animate card. */
+.demo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.chip {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.chip:hover {
+  border-color: #345180;
+  color: var(--text);
+}
+
+.chip.active {
+  background: linear-gradient(140deg, rgba(37, 99, 235, 0.4), rgba(124, 58, 237, 0.32));
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* Mini section labels inside cards (Layers groups, vector block). */
+.subhead {
+  margin: 13px 0 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #6f83a6;
+}
+
+.card > .subhead:first-of-type {
+  margin-top: 10px;
+}
+
+.subhead .mono {
+  text-transform: none;
+}
+
+.segmented + .select {
+  margin-top: 9px;
+}
+
+/* Preset / deck name under a card title. */
+.card-sub {
+  margin: -4px 0 9px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #8ea3c0;
+}
+
+/* Lead sentence visible; the rest folds behind native details/summary. */
+.expander {
+  margin-top: 8px;
+}
+
+.expander summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  user-select: none;
+}
+
+.expander summary::-webkit-details-marker {
+  display: none;
+}
+
+.expander summary::before {
+  content: '▸ ';
+  color: var(--accent-a);
+  font-size: 11px;
+}
+
+.expander[open] > summary::before {
+  content: '▾ ';
+}
+
+.expander summary:hover {
+  color: var(--text);
+}
+
+.expander summary:focus-visible {
+  outline: 2px solid var(--accent-a);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.expander p {
+  margin: 6px 0 0;
+}
+
+.expander.warn-text summary {
+  color: #fbbf24;
+}
+
+.expander.warn-text summary:hover {
+  color: #fcd34d;
+}
+
+/* Sticky pill navigation at the top of the inspector. */
+.pill-nav {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px 0 8px;
+  background: rgba(7, 10, 18, 0.94);
+  backdrop-filter: blur(8px);
+}
+
+.pill-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.pill {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pill:hover {
+  color: var(--text);
+  border-color: #345180;
+  background: var(--panel-2);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--accent-a);
+  outline-offset: 2px;
+}
+
+/* Sticky group headers, tucked under the pill nav. */
+.group-header {
+  position: sticky;
+  top: 40px;
+  z-index: 5;
+  margin: 4px 0 -2px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid var(--line-soft);
+  background: rgba(7, 10, 18, 0.94);
+  backdrop-filter: blur(8px);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7488ab;
+}
+
+/* Legend as a translucent, non-interactive overlay inside the stage,
+   raised just above the viewport hint pill so the two never collide. */
+.stage > .legend {
+  position: absolute;
+  left: 10px;
+  bottom: 48px;
+  z-index: 3;
+  justify-content: flex-start;
+  max-width: calc(100% - 20px);
+  padding: 6px 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(8, 12, 22, 0.72);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.stage > .legend li {
+  font-size: 11.5px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Transition bar: scrub / replay the before → after morph             */
+/* ------------------------------------------------------------------ */
+
+/* Sits a row above the legend (bottom: 48px) so wide legends and the
+   transport pill never collide; the hint pill keeps the very bottom. */
+.transition-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 86px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(8, 12, 22, 0.82);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px rgba(2, 6, 16, 0.45);
+  white-space: nowrap;
+}
+
+.tb-play {
+  width: 30px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  background: rgba(30, 41, 59, 0.85);
+  color: #93c5fd;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tb-play:hover {
+  background: rgba(51, 65, 85, 0.95);
+}
+
+.tb-slider {
+  width: 150px;
+  accent-color: var(--accent-a);
+  cursor: pointer;
+}
+
+.tb-pct {
+  min-width: 34px;
+  text-align: right;
+  font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+.tb-toggle {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: rgba(15, 23, 42, 0.7);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tb-toggle:hover {
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.5);
+}
+
+.tb-toggle.on {
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.6);
+  background: rgba(30, 58, 138, 0.55);
+}
+
+/* 3D split view: before | after tags over the two scissored halves. */
+.split-tags {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.split-tags span {
+  position: absolute;
+  top: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(8, 12, 22, 0.78);
+  font: 600 10.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.split-tags .split-before {
+  left: 12px;
+}
+
+.split-tags .split-after {
+  left: calc(50% + 12px);
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+/* ------------------------------------------------------------------ */
+/* PCA: point-cloud sliders & explained-variance bar                   */
+/* ------------------------------------------------------------------ */
+
+.sliders {
+  margin-top: 4px;
+}
+
+.slider {
+  display: block;
+  margin-top: 9px;
+  cursor: pointer;
+}
+
+.slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.slider-value {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.slider input[type='range'] {
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  accent-color: #7c3aed;
+  cursor: pointer;
+}
+
+.slider input[type='range']:focus-visible {
+  outline: 2px solid var(--accent-a);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Stacked explained-variance share per PC (colours match the PC arrows). */
+.var-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin-top: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.var-seg {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+
+.var-seg + .var-seg {
+  opacity: 0.85;
+}
+
+/* ------------------------------------------------------------------ */
 /* Scrollbars & responsive                                             */
 /* ------------------------------------------------------------------ */
 
@@ -818,6 +1213,78 @@ pre {
   .inspector {
     grid-area: inspector;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 4×4 block view                                                      */
+/* ------------------------------------------------------------------ */
+
+/* Four 2×2 editors, one per block of M = [A B; C D]. */
+.block-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.block-cell {
+  position: relative;
+  padding-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.block-cell .matrix-editor {
+  margin: 4px 0 6px;
+}
+
+.block-letter {
+  position: absolute;
+  top: 2px;
+  left: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* The colored 2×2 block readout in the Partitioned matrix card. */
+.block-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+
+.block-row {
+  display: flex;
+  gap: 8px;
+}
+
+.block-box {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.block-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  flex: none;
+}
+
+.block-vals {
+  font-size: 12px;
+  color: #cfe0f7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (max-width: 860px) {

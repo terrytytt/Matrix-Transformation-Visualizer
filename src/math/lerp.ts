@@ -18,6 +18,19 @@ export function easeInOutCubic(t: number): number {
 }
 
 /**
+ * Exposure blend for the "watch the transformation" scrubber: the picture at
+ * t = 0 is plain space (identity), at t = 1 it is M itself, eased so the
+ * slider's midpoint lands halfway through the morph. Every point therefore
+ * travels a straight line from where it started to where M sends it.
+ * The result is meant to be read by renderers, not mutated.
+ */
+export function blendFromIdentity(M: Matrix, t: number): Matrix {
+  if (t >= 1) return M;
+  if (t <= 0) return identity(M.length);
+  return lerpMatrix(identity(M.length), M, easeInOutCubic(t));
+}
+
+/**
  * Animates a matrix from its previous value to a new target.
  * Renderers call `current()` every frame; `set()` whenever the target changes.
  */

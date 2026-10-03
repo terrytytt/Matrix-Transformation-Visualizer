@@ -25,11 +25,17 @@ export function MatrixInput({
   onEntry,
   accent = 'var(--accent-a)',
   ariaLabel = 'Matrix',
+  rowOffset = 0,
+  colOffset = 0,
 }: {
   matrix: Matrix;
   onEntry: (i: number, j: number, v: number) => void;
   accent?: string;
   ariaLabel?: string;
+  /** Where this (sub-)matrix sits inside the full matrix — used by the */
+  /** 4×4 block editor, which shows four 2×2 pieces of one matrix. */
+  rowOffset?: number;
+  colOffset?: number;
 }) {
   const n = matrix.length;
   const [text, setText] = useState<string[]>(() => matrix.flat().map(fmt));
@@ -58,7 +64,7 @@ export function MatrixInput({
     const flat = matrix.flat();
     flat[idx] = parsed;
     lastPushed.current = sig(chunk(flat, n));
-    onEntry(Math.floor(idx / n), idx % n, parsed);
+    onEntry(rowOffset + Math.floor(idx / n), colOffset + (idx % n), parsed);
   };
 
   const blur = (idx: number) => {
@@ -86,7 +92,9 @@ export function MatrixInput({
             type="text"
             inputMode="decimal"
             spellCheck={false}
-            aria-label={`${ariaLabel} row ${Math.floor(idx / n) + 1} column ${(idx % n) + 1}`}
+            aria-label={`${ariaLabel} row ${rowOffset + Math.floor(idx / n) + 1} column ${
+              colOffset + (idx % n) + 1
+            }`}
             value={value}
             onChange={(e) => update(idx, e.target.value)}
             onBlur={() => blur(idx)}

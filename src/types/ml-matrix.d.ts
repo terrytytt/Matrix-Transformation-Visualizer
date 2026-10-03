@@ -30,9 +30,15 @@ declare module 'ml-matrix' {
 
   export class SingularValueDecomposition {
     constructor(matrix: number[][] | Matrix);
-    readonly u: Matrix;
-    readonly s: Matrix;
-    readonly v: Matrix;
+    /**
+     * Singular values, **descending**. NOTE: at runtime this is a plain
+     * `number[]`, despite older typings claiming `Matrix`.
+     */
+    readonly s: number[];
+    /** Columns are the left singular vectors uᵢ (A vᵢ = σᵢ uᵢ). */
+    readonly leftSingularVectors: Matrix;
+    /** Columns are the right singular vectors vᵢ. */
+    readonly rightSingularVectors: Matrix;
   }
 
   export const EVD: typeof EigenvalueDecomposition;

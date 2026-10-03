@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useApp } from '../state/store';
-import { useActiveMatrix } from '../state/hooks';
+import { Decomp, useApp } from '../state/store';
+import { DecompFacts, useActiveMatrix, useDataFacts, useDecompFacts } from '../state/hooks';
 import {
   Matrix,
   Vector,
   columnSpaceBasis,
   det,
+  identity,
   inverse,
   matVec,
+  norm,
   normalize,
   nullSpaceBasis,
+  quadraticContours,
   rank,
+  symmetricPart,
 } from '../math/matrix';
-import { MatrixTween } from '../math/lerp';
-import { EigenEntry, eigen, realEigenpairs } from '../math/eigen';
+import { MatrixTween, blendFromIdentity } from '../math/lerp';
+import { EigenEntry, eigen, ellipseAxes, realEigenpairs, symmetricBasis } from '../math/eigen';
 
 export interface View {
   /** pixels per world unit */
@@ -38,6 +42,19 @@ const COLORS = {
   nullSpace: '#fb923c',
   colSpace: '#22d3ee',
   transpose: 'rgba(250, 204, 21, 0.34)',
+  ellipse: '#e879f9',
+  circle: 'rgba(203, 213, 225, 0.55)',
+  levelSets: '#2dd4bf',
+  // Sign-field ramp: warm (positive) → cool (negative), as [r,g,b].
+  formWarm: [251, 191, 36],
+  formCool: [129, 140, 248],
+  /** Factor directions of the running SVD / spectral demo. */
+  decomp: '#f8fafc',
+  /** PCA datasets: rose samples, lighter rose for the 1σ/2σ contours. */
+  data: '#fb7185',
+  dataEllipse: '#fda4af',
+  /** Dashed distance from each centered point to its PC1 reconstruction. */
+  residual: '#94a3b8',
   text: '#e2e8f0',
 };
 
@@ -52,33 +69,83 @@ export function Viewport2D() {
   const vector = useApp((s) => s.vector);
   const layers = useApp((s) => s.layers);
   const setVector = useApp((s) => s.setVector);
+  const decomp = useApp((s) => s.decomp);
+  const decompStep = useApp((s) => s.decompStep);
+  const decompFacts = useDecompFacts();
+  const dataset = useApp((s) => s.dataset);
+  const dataFacts = useDataFacts(dataset);
+  const transT = useApp((s) => s.transT);
+  const ghostAlways = useApp((s) => s.ghostAlways);
+  const splitView = useApp((s) => s.splitView);
 
   const view = useRef<View>({ scale: 44, ox: 0, oy: 0 });
   const tween = useRef<MatrixTween | null>(null);
+  /** Eased positions of the data cloud (raw ↔ centered ↔ projected). */
+  const cloudShown = useRef<Vector[]>([]);
+  const lastT = useRef(performance.now());
+  /** Tracks the split toggle so the shared pan offset can follow it. */
+  const splitRef = useRef(false);
   const drag = useRef<{ mode: 'none' | 'pan' | 'vector'; x: number; y: number }>({
     mode: 'none',
     x: 0,
     y: 0,
   });
-  const latest = useRef({ M: targetMatrix, vector, layers, A });
-  latest.current = { M: targetMatrix, vector, layers, A };
+  const latest = useRef({
+    M: targetMatrix,
+    vector,
+    layers,
+    A,
+    decomp,
+    decompStep,
+    decompFacts,
+    dataset,
+    dataFacts,
+    transT,
+    ghostAlways,
+    splitView,
+  });
+  latest.current = {
+    M: targetMatrix,
+    vector,
+    layers,
+    A,
+    decomp,
+    decompStep,
+    decompFacts,
+    dataset,
+    dataFacts,
+    transT,
+    ghostAlways,
+    splitView,
+  };
 
   // Lazily initialised on the first frame so the tween starts settled.
   const ensureTween = () => (tween.current ??= new MatrixTween(targetMatrix.matrix));
 
   const derived = useMemo(
-    () => ({
-      invA: inverse(A),
-      eigA: eigen(A),
-      rankA: rank(A),
-      colA: columnSpaceBasis(A),
-      nullA: nullSpaceBasis(A),
-      detA: det(A),
-    }),
+    () => {
+      const sym = symmetricPart(A);
+      return {
+        invA: inverse(A),
+        eigA: eigen(A),
+        rankA: rank(A),
+        colA: columnSpaceBasis(A),
+        nullA: nullSpaceBasis(A),
+        detA: det(A),
+        // Axes of the quadratic form xᵀAx: eigenbasis of (A+Aᵀ)/2.
+        symPairs: symmetricBasis(sym),
+        // The symmetric part itself — sign-field and level sets read from it.
+        sym,
+      };
+    },
     [A],
   );
   const derivedRef = useRef(derived);
   derivedRef.current = derived;
+
+  // Half-res sign-field rendering, re-baked only when A or the view changes.
+  // Split view keeps one bake per half (their origins differ), hence a small map.
+  const formCache = useRef<Map<string, HTMLCanvasElement> | null>(null);
 
   /* ---------------------------------------------------------------- */
   /* Interaction                                                       */
@@ -121,9 +188,14 @@ export function Viewport2D() {
       const py = oy - tip[1] * scale;
       const rect = canvas.getBoundingClientRect();
       const dist = Math.hypot(e.clientX - rect.left - px, e.clientY - rect.top - py);
+      // In split view the left half is a read-only "before" mirror: only the
+      // right (after) half reaches for the vector tip — its handles are the
+      // ones drawn with this origin.
+      const reachable =
+        !latest.current.splitView || e.clientX - rect.left >= canvas.clientWidth / 2;
 
       drag.current =
-        dist < 14 && latest.current.layers.vector
+        reachable && dist < 14 && latest.current.layers.vector
           ? { mode: 'vector', x: e.clientX, y: e.clientY }
           : { mode: 'pan', x: e.clientX, y: e.clientY };
       canvas.setPointerCapture(e.pointerId);
@@ -138,9 +210,11 @@ export function Viewport2D() {
         const tip = latest.current.vector;
         const { scale, ox, oy } = view.current;
         const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
         const px = ox + tip[0] * scale;
         const py = oy - tip[1] * scale;
-        const near = Math.hypot(e.clientX - rect.left - px, e.clientY - rect.top - py) < 14;
+        const reachable = !latest.current.splitView || sx >= canvas.clientWidth / 2;
+        const near = reachable && Math.hypot(sx - px, e.clientY - rect.top - py) < 14;
         canvas.style.cursor = near ? 'grab' : 'default';
         return;
       }
@@ -171,12 +245,17 @@ export function Viewport2D() {
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
       const { scale, ox, oy } = view.current;
-      const wx = (sx - ox) / scale;
+      // Split view: zoom about the cursor inside whichever half it's over —
+      // each half keeps its own origin, exactly W/2 apart.
+      const Wc = canvas.clientWidth;
+      const left = latest.current.splitView && sx < Wc / 2;
+      const effOx = left ? ox - Wc / 2 : ox;
+      const wx = (sx - effOx) / scale;
       const wy = (oy - sy) / scale;
       const factor = Math.exp(-e.deltaY * 0.0015);
       const next = clamp(scale * factor, 8, 400);
       view.current.scale = next;
-      view.current.ox = sx - wx * next;
+      view.current.ox = sx - wx * next + (left ? Wc / 2 : 0);
       view.current.oy = sy + wy * next;
     };
 
@@ -204,6 +283,150 @@ export function Viewport2D() {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext('2d')!;
     let raf = 0;
+    /** Seconds since the previous frame — read by the pass body (cloud easing). */
+    let frameDt = 0;
+
+    /**
+     * One render pass: everything clipped to `rect`, drawn through its own
+     * world origin `ox`. Split view runs two of these — a read-only
+     * "before" half at identity and the live "after" half at the blended
+     * matrix; the overlay mode runs a single full-canvas pass.
+     *
+     * `dest` is the full matrix the morph is heading for (non-null only
+     * while t < 1 on the live side), used for the destination ghosts.
+     */
+    const drawPass = (
+      rect: { x: number; y: number; w: number; h: number; tag: 'before' | 'after' | null },
+      ox: number,
+      M: Matrix,
+      dest: Matrix | null,
+    ) => {
+      const now = latest.current;
+      const ly = now.layers;
+      const before = rect.tag === 'before';
+      const t = now.transT;
+      const v = view.current;
+      const vl: View = { scale: v.scale, ox, oy: v.oy };
+      const toScreen = (p: Vector): [number, number] => [vl.ox + p[0] * vl.scale, vl.oy - p[1] * vl.scale];
+
+      ctx.save();
+      ctx.translate(rect.x, rect.y);
+      ctx.beginPath();
+      ctx.rect(0, 0, rect.w, rect.h);
+      ctx.clip();
+
+      if (ly.form) drawFormField(ctx, derivedRef.current.sym, vl, rect.w, rect.h, formCache);
+      if (ly.grid) drawOriginalGrid(ctx, rect.w, rect.h, vl, toScreen);
+      drawAxes(ctx, rect.w, rect.h, toScreen);
+      if (ly.levelSets) drawLevelSets(ctx, derivedRef.current.symPairs, vl, toScreen);
+      if (ly.determinant) drawDeterminantRegion(ctx, M, vl, toScreen);
+      if (ly.grid) drawImageGrid(ctx, rect.w, rect.h, vl, M, toScreen);
+
+      if (ly.transpose) {
+        drawImageGrid(ctx, rect.w, rect.h, vl, transposeOf(M), toScreen, COLORS.transpose, [5, 4]);
+      }
+      if (ly.ellipse) drawImageEllipse(ctx, M, vl, toScreen);
+      if (ly.columnSpace) drawColumnSpace(ctx, derivedRef.current, vl, toScreen);
+      if (ly.nullSpace) drawNullSpace(ctx, derivedRef.current, vl, toScreen);
+      if (ly.basis) drawBasis(ctx, M, vl, toScreen);
+      if (ly.vector) drawVectorPair(ctx, M, now.vector, vl, toScreen);
+
+      // PCA datasets: ease the cloud between its per-step targets (raw →
+      // centered → transformed by the step matrix), then draw the 1σ/2σ
+      // contours and the PC1 residuals underneath the samples. The "before"
+      // pass snaps to the raw snapshot instead — it must never fight the
+      // eased array the live pass is animating.
+      const ds = now.dataset;
+      const df = now.dataFacts;
+      if (ds && df && (ly.points || ly.dataEllipse || ly.residuals)) {
+        const isPca = now.decomp === 'pcaProjection' || now.decomp === 'pcaRotation';
+        const ref = isPca && now.decompStep > 0 ? ds.centered : ds.points;
+        let shown: Vector[];
+        if (before) {
+          shown = ref;
+        } else {
+          if (cloudShown.current.length !== ref.length) {
+            cloudShown.current = ref.map((p) => p.slice());
+          }
+          const a = 1 - Math.exp(-frameDt * 14);
+          const cloud = cloudShown.current;
+          for (let i = 0; i < ref.length; i++) {
+            const target = isPca ? matVec(M, ref[i]) : ref[i];
+            const row = cloud[i];
+            for (let c = 0; c < row.length; c++) row[c] += (target[c] - row[c]) * a;
+          }
+          shown = cloud;
+        }
+        const mean: Vector = [
+          shown.reduce((s, p) => s + p[0], 0) / shown.length,
+          shown.reduce((s, p) => s + p[1], 0) / shown.length,
+        ];
+        if (ly.residuals) drawResiduals(ctx, ds.centered, df.proj, toScreen);
+        if (ly.dataEllipse && !before) drawDataEllipse(ctx, M, df.sqrtS, mean, toScreen);
+        if (ly.points) {
+          drawDataPoints(ctx, shown, toScreen);
+          drawMeanMarker(ctx, mean, toScreen);
+        }
+      }
+
+      if (ly.eigen) drawEigenvectors(ctx, derivedRef.current.eigA, vl, toScreen);
+      if (now.decomp === 'svd' || now.decomp === 'spectral')
+        drawDecompMarkers(ctx, M, now.decomp, now.decompStep, now.decompFacts, toScreen);
+
+      // Morph landmarks on the live side: the square where the picture
+      // started, a dashed outline of where it's heading, and streaks tracing
+      // each tracked tip's straight-line travel so far.
+      if (!before) {
+        const showGhost = now.ghostAlways || t < 1;
+        if (showGhost && ly.determinant) {
+          drawSquareOutline(
+            ctx,
+            ([[0, 0], [1, 0], [1, 1], [0, 1]] as Vector[]),
+            toScreen,
+            'rgba(148, 163, 184, 0.75)',
+            [4, 3],
+          );
+        }
+        if (dest) {
+          if (ly.grid) {
+            drawImageGrid(ctx, rect.w, rect.h, vl, dest, toScreen, 'rgba(96, 165, 250, 0.34)', [3, 4]);
+          }
+          if (ly.determinant) {
+            drawSquareOutline(
+              ctx,
+              ([[0, 0], [1, 0], [1, 1], [0, 1]] as Vector[]).map((c) => matVec(dest, c)),
+              toScreen,
+              'rgba(163, 230, 53, 0.7)',
+              [6, 4],
+            );
+          }
+          if (ly.basis) {
+            drawArrow(ctx, toScreen([0, 0]), toScreen(matVec(dest, [1, 0])), COLORS.e1, 1.6, [4, 4], 0.5);
+            drawArrow(ctx, toScreen([0, 0]), toScreen(matVec(dest, [0, 1])), COLORS.e2, 1.6, [4, 4], 0.5);
+          }
+          if (ly.vector) {
+            drawArrow(ctx, toScreen([0, 0]), toScreen(matVec(dest, now.vector)), COLORS.vec, 1.6, [5, 4], 0.5);
+          }
+        }
+        if (t > 0 && t < 1) drawStreaks(ctx, M, now.vector, toScreen);
+      }
+
+      if (rect.tag) {
+        drawLabel(
+          ctx,
+          10,
+          15,
+          before ? 'before · plain space' : 'after · live',
+          before ? '#94a3b8' : '#93c5fd',
+          'left',
+          0,
+          0,
+          0.95,
+        );
+      }
+
+      ctx.restore();
+    };
 
     const frame = () => {
       raf = requestAnimationFrame(frame);
@@ -212,30 +435,46 @@ export function Viewport2D() {
       const H = canvas.clientHeight;
 
       const now = latest.current;
-      const ly = now.layers;
       const tw = ensureTween();
       tw.set(now.M.matrix);
-      const M = tw.current();
+      const base = tw.current();
+      const t = now.transT;
+      const M = blendFromIdentity(base, t);
+
+      const tNow = performance.now();
+      frameDt = Math.min(0.1, (tNow - lastT.current) / 1000);
+      lastT.current = tNow;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, W, H);
 
       const v = view.current;
-      const toScreen = (p: Vector): [number, number] => [v.ox + p[0] * v.scale, v.oy - p[1] * v.scale];
+
+      // Toggling split keeps the world point at the canvas centre pinned to
+      // each half's centre: shift the stored origin by a quarter width.
+      if (splitRef.current !== now.splitView) {
+        v.ox += now.splitView ? W / 4 : -W / 4;
+        splitRef.current = now.splitView;
+      }
 
       paintBackground(ctx, W, H);
-      drawOriginalGrid(ctx, W, H, v, toScreen);
-      if (ly.determinant) drawDeterminantRegion(ctx, M, v, toScreen);
-      drawImageGrid(ctx, W, H, v, M, toScreen);
 
-      if (ly.transpose) {
-        drawImageGrid(ctx, W, H, v, transposeOf(M), toScreen, COLORS.transpose, [5, 4]);
+      if (now.splitView) {
+        const lw = Math.floor(W / 2);
+        drawPass({ x: 0, y: 0, w: lw, h: H, tag: 'before' }, v.ox - W / 2, identity(2), null);
+        drawPass({ x: lw, y: 0, w: W - lw, h: H, tag: 'after' }, v.ox, M, t < 1 ? base : null);
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(lw + 0.5, 0);
+        ctx.lineTo(lw + 0.5, H);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        drawPass({ x: 0, y: 0, w: W, h: H, tag: null }, v.ox, M, t < 1 ? base : null);
       }
-      if (ly.columnSpace) drawColumnSpace(ctx, derivedRef.current, v, toScreen);
-      if (ly.nullSpace) drawNullSpace(ctx, derivedRef.current, v, toScreen);
-      if (ly.basis) drawBasis(ctx, M, v, toScreen);
-      if (ly.vector) drawVectorPair(ctx, M, now.vector, v, toScreen);
-      if (ly.eigen) drawEigenvectors(ctx, derivedRef.current.eigA, v, toScreen);
     };
 
     raf = requestAnimationFrame(frame);
@@ -265,6 +504,90 @@ function paintBackground(ctx: CanvasRenderingContext2D, W: number, H: number) {
   g.addColorStop(1, '#080b14');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
+}
+
+/**
+ * Sign field of the quadratic form xᵀAx (drawn from the symmetric part S,
+ * since xᵀAx = xᵀSx): warm amber where positive, cool violet where negative,
+ * fading to transparent at the zero set — so an indefinite form shows its
+ * null cone as a dark seam splitting warm from cool.
+ *
+ * Rendered at half resolution into a cached offscreen canvas; the cache is
+ * keyed on (S, view, size) so the field is only re-baked when something it
+ * depends on actually changes.
+ */
+function drawFormField(
+  ctx: CanvasRenderingContext2D,
+  S: Matrix,
+  v: View,
+  W: number,
+  H: number,
+  cache: { current: Map<string, HTMLCanvasElement> | null },
+) {
+  const key = `${S.flat().join(',')}|${v.scale}|${v.ox}|${v.oy}|${W}|${H}`;
+  const store = cache.current ?? (cache.current = new Map());
+  if (!store.has(key)) {
+    const fw = Math.max(1, Math.ceil(W / 2));
+    const fh = Math.max(1, Math.ceil(H / 2));
+    const cv = document.createElement('canvas');
+    cv.width = fw;
+    cv.height = fh;
+    const cctx = cv.getContext('2d')!;
+    const img = cctx.createImageData(fw, fh);
+    const data = img.data;
+
+    const [[s11, s12], [, s22]] = S;
+    // Normalize each sign separately (sampled over a coarse grid of the
+    // visible world): |q| peaks very differently on the two sides when
+    // |λ|max ≫ |λ|min, and both families should reach full intensity.
+    const b = worldBounds(W, H, v);
+    let refPos = 1e-12;
+    let refNeg = 1e-12;
+    const N = 16;
+    for (let j = 0; j <= N; j++) {
+      const wy = b.y0 + ((b.y1 - b.y0) * j) / N;
+      for (let i = 0; i <= N; i++) {
+        const wx = b.x0 + ((b.x1 - b.x0) * i) / N;
+        const q = s11 * wx * wx + 2 * s12 * wx * wy + s22 * wy * wy;
+        if (q > refPos) refPos = q;
+        if (-q > refNeg) refNeg = -q;
+      }
+    }
+
+    const [wr, wg, wb] = COLORS.formWarm;
+    const [cr, cg, cb] = COLORS.formCool;
+    const MAX_A = 0.4;
+
+    for (let j = 0; j < fh; j++) {
+      const wy = (v.oy - j * 2) / v.scale;
+      for (let i = 0; i < fw; i++) {
+        const wx = (i * 2 - v.ox) / v.scale;
+        const q = s11 * wx * wx + 2 * s12 * wx * wy + s22 * wy * wy;
+        // sqrt ramp: q grows quadratically, so a linear |q|/ref ramp would
+        // leave the whole mid-field nearly invisible while corners saturate.
+        const t = Math.sqrt(Math.min(1, Math.abs(q) / (q >= 0 ? refPos : refNeg)));
+        const o = (j * fw + i) * 4;
+        if (q >= 0) {
+          data[o] = wr;
+          data[o + 1] = wg;
+          data[o + 2] = wb;
+        } else {
+          data[o] = cr;
+          data[o + 1] = cg;
+          data[o + 2] = cb;
+        }
+        data[o + 3] = Math.round(255 * MAX_A * t);
+      }
+    }
+    cctx.putImageData(img, 0, 0);
+    if (store.size >= 4) store.clear();
+    store.set(key, cv);
+  }
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(store.get(key)!, 0, 0, W, H);
+  ctx.restore();
 }
 
 /** Integer lattice covering the visible world rectangle. */
@@ -308,8 +631,15 @@ function drawOriginalGrid(
     ctx.lineTo(bx, by);
   }
   ctx.stroke();
+}
 
-  // axes
+/** The x/y axes through the origin — always drawn, even when the lattice is off. */
+function drawAxes(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  toScreen: (p: Vector) => [number, number],
+) {
   ctx.strokeStyle = COLORS.axis;
   ctx.lineWidth = 1.4;
   ctx.beginPath();
@@ -427,6 +757,101 @@ function drawDeterminantRegion(
   drawLabel(ctx, lx, ly, `det = ${fmtNum(d)}`, d >= 0 ? '#86efac' : '#fca5a5', 'center', 0, 14);
 }
 
+/**
+ * Layer ① of the eigenvalue/ellipse story: the unit circle (grey, dashed)
+ * and its image under the *currently drawn* matrix `M` — an ellipse whose
+ * semi-axes are the singular values σ₁ ≥ σ₂, pointed out with arrows.
+ */
+function drawImageEllipse(
+  ctx: CanvasRenderingContext2D,
+  M: Matrix,
+  v: View,
+  toScreen: (p: Vector) => [number, number],
+) {
+  // Reference unit circle.
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = COLORS.circle;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  const [cx, cy] = toScreen([0, 0]);
+  ctx.arc(cx, cy, v.scale, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Image of the circle: sample the unit circle and push every point through M.
+  const N = 128;
+  const pts: [number, number][] = [];
+  for (let k = 0; k < N; k++) {
+    const t = (2 * Math.PI * k) / N;
+    pts.push(toScreen(matVec(M, [Math.cos(t), Math.sin(t)])));
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.fillStyle = withAlpha(COLORS.ellipse, 0.10);
+  ctx.fill();
+  ctx.strokeStyle = COLORS.ellipse;
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+  ctx.restore();
+
+  // Semi-axes σᵢ along the image's principal directions.
+  ellipseAxes(M).forEach((ax, k) => {
+    if (ax.sigma < 1e-6) return; // collapsed axis (rank-deficient A)
+    drawArrow(ctx, toScreen([0, 0]), toScreen(ax.tip), COLORS.ellipse, 2.4, [], 0.95);
+    drawLabel(
+      ctx,
+      ...toScreen(ax.tip),
+      `σ${sub(k + 1)} = ${fmtNum(ax.sigma)}`,
+      COLORS.ellipse,
+      'left',
+      8,
+      -11,
+    );
+  });
+}
+
+/**
+ * Layer ②: level sets xᵀAx = c for c ∈ {±1, ±3}, drawn from the static
+ * matrix A via the eigenbasis of its symmetric part (the directions in
+ * which the quadratic form has no cross term).
+ */
+function drawLevelSets(
+  ctx: CanvasRenderingContext2D,
+  pairs: { lam: number; dir: Vector }[],
+  v: View,
+  toScreen: (p: Vector) => [number, number],
+) {
+  if (pairs.length < 2) return;
+  const [p1, p2] = pairs;
+  // Open branches are drawn out to ±14 world units; the canvas clips the rest.
+  const extent = 14;
+
+  ctx.save();
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = withAlpha(COLORS.levelSets, 0.9);
+
+  for (const c of [1, -1, 3, -3]) {
+    for (const branch of quadraticContours(p1.lam, p2.lam, c, 96, extent)) {
+      ctx.beginPath();
+      branch.forEach((y, i) => {
+        const world: Vector = [
+          p1.dir[0] * y[0] + p2.dir[0] * y[1],
+          p1.dir[1] * y[0] + p2.dir[1] * y[1],
+        ];
+        const [sx, sy] = toScreen(world);
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      });
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 function drawBasis(
   ctx: CanvasRenderingContext2D,
   M: Matrix,
@@ -471,6 +896,63 @@ function drawVectorPair(
   ctx.strokeStyle = '#0b1020';
   ctx.lineWidth = 2;
   ctx.stroke();
+}
+
+/** Dashed outline of a quadrilateral (the before / destination squares). */
+function drawSquareOutline(
+  ctx: CanvasRenderingContext2D,
+  corners: Vector[],
+  toScreen: (p: Vector) => [number, number],
+  color: string,
+  dash: number[],
+) {
+  ctx.save();
+  ctx.setLineDash(dash);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  corners.forEach((c, i) => {
+    const [x, y] = toScreen(c);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Streaks for the tracked tips while the scrub runs (0 < t < 1): the
+ * straight path each point has travelled from its plain-space start to its
+ * current position — exact, because lerp(I, M, t) moves every point
+ * linearly.
+ */
+function drawStreaks(
+  ctx: CanvasRenderingContext2D,
+  M: Matrix,
+  x: Vector,
+  toScreen: (p: Vector) => [number, number],
+) {
+  const tracks: [Vector, string][] = [
+    [[1, 0], COLORS.e1],
+    [[0, 1], COLORS.e2],
+    [[1, 1], '#a3e635'],
+    [x, COLORS.vec],
+  ];
+  ctx.save();
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  for (const [p, color] of tracks) {
+    const cur = matVec(M, p);
+    const a = toScreen(p);
+    const b = toScreen(cur);
+    ctx.strokeStyle = withAlpha(color, 0.5);
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawEigenvectors(
@@ -585,11 +1067,166 @@ function drawNullSpace(
   ctx.restore();
 }
 
+/**
+ * Factor directions for the running SVD / spectral demo: white dashed
+ * arrows drawn through the *tweened* step matrix, so they move with the
+ * animation from vᵢ → eᵢ → σᵢeᵢ → σᵢuᵢ (SVD) or vᵢ → eᵢ → λᵢeᵢ → λᵢvᵢ
+ * (spectral). Steps that collapse a direction (σ = 0, λ = 0) draw nothing.
+ */
+function drawDecompMarkers(
+  ctx: CanvasRenderingContext2D,
+  M: Matrix,
+  decomp: Decomp,
+  step: number,
+  facts: DecompFacts,
+  toScreen: (p: Vector) => [number, number],
+) {
+  const n = M.length;
+  const dirs: Vector[] = [];
+  if (decomp === 'svd') {
+    // Rows of Vᵀ are the right-singular vectors vᵢ.
+    for (let i = 0; i < n && facts.svd?.Vt[i]; i++) dirs.push(facts.svd.Vt[i]);
+  } else {
+    // Columns of P are the eigenvectors.
+    const P = facts.spectral.P;
+    if (P) for (let i = 0; i < n; i++) dirs.push(P.map((row) => row[i] ?? 0));
+  }
+  if (dirs.length === 0) return;
+
+  const k = Math.min(Math.max(step, 0), 3);
+  const labelFor = (i: number): string => {
+    const s = sub(i + 1);
+    if (decomp === 'svd') return [`v${s}`, `e${s}`, `σ${s}e${s}`, `σ${s}u${s}`][k];
+    return [`v${s}`, `e${s}`, `λ${s}e${s}`, `λ${s}v${s}`][k];
+  };
+
+  const [ox, oy] = toScreen([0, 0]);
+  for (let i = 0; i < dirs.length; i++) {
+    const tip = matVec(M, dirs[i]);
+    if (norm(tip) < 1e-6) continue;
+    const [tx, ty] = toScreen(tip);
+    drawArrow(ctx, [ox, oy], [tx, ty], COLORS.decomp, 1.8, [6, 5], 0.95);
+    // Down-left: the ellipse's σ labels and the layer's Ae labels all sit
+    // up-right, so markers landing on an axis tip stay readable.
+    drawLabel(ctx, tx, ty, labelFor(i), COLORS.decomp, 'right', -10, 13);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* PCA datasets — samples, mean, 1σ/2σ contours, PC1 residuals        */
+/* ------------------------------------------------------------------ */
+
+/** The cloud: rose dots with a dark rim so they read over grid lines. */
+function drawDataPoints(
+  ctx: CanvasRenderingContext2D,
+  pts: Vector[],
+  toScreen: (p: Vector) => [number, number],
+) {
+  ctx.save();
+  for (const p of pts) {
+    const [x, y] = toScreen(p);
+    ctx.beginPath();
+    ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS.data;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(8, 11, 20, 0.75)';
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** White cross + x̄ label at the cloud's mean (rides the demo, so it lands on the origin once centered). */
+function drawMeanMarker(
+  ctx: CanvasRenderingContext2D,
+  mean: Vector,
+  toScreen: (p: Vector) => [number, number],
+) {
+  const [x, y] = toScreen(mean);
+  ctx.save();
+  ctx.strokeStyle = COLORS.decomp;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - 7, y);
+  ctx.lineTo(x + 7, y);
+  ctx.moveTo(x, y - 7);
+  ctx.lineTo(x, y + 7);
+  ctx.stroke();
+  ctx.restore();
+  drawLabel(ctx, x, y, 'x̄', COLORS.decomp, 'left', 9, -10);
+}
+
+/**
+ * 1σ (solid) and 2σ (dashed) contours: the circle pushed through √S and
+ * then through the step matrix, centred on the cloud's mean — semi-axes
+ * √λ along the PCs, not the λ of the "ellipse of A" layer.
+ */
+function drawDataEllipse(
+  ctx: CanvasRenderingContext2D,
+  M: Matrix,
+  sqrtS: Matrix,
+  center: Vector,
+  toScreen: (p: Vector) => [number, number],
+) {
+  const N = 96;
+  const ring = (scale: number): Array<[number, number]> =>
+    Array.from({ length: N }, (_, k) => {
+      const t = (2 * Math.PI * k) / N;
+      const u = matVec(sqrtS, [Math.cos(t), Math.sin(t)]).map((x) => x * scale);
+      const w = matVec(M, u);
+      return toScreen([center[0] + w[0], center[1] + w[1]]);
+    });
+
+  ctx.save();
+  // 2σ first, behind.
+  ctx.setLineDash([6, 5]);
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = withAlpha(COLORS.dataEllipse, 0.7);
+  ctx.beginPath();
+  ring(2).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.stroke();
+  // 1σ solid with a faint fill.
+  ctx.setLineDash([]);
+  const p1 = ring(1);
+  ctx.beginPath();
+  p1.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.fillStyle = withAlpha(COLORS.data, 0.08);
+  ctx.fill();
+  ctx.lineWidth = 1.9;
+  ctx.strokeStyle = COLORS.dataEllipse;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Dashed segments from each centered sample to its PC1 reconstruction. */
+function drawResiduals(
+  ctx: CanvasRenderingContext2D,
+  centered: Vector[],
+  proj: Vector[],
+  toScreen: (p: Vector) => [number, number],
+) {
+  ctx.save();
+  ctx.setLineDash([3, 3]);
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = withAlpha(COLORS.residual, 0.95);
+  ctx.beginPath();
+  for (let i = 0; i < centered.length && i < proj.length; i++) {
+    const [ax, ay] = toScreen(centered[i]);
+    const [bx, by] = toScreen(proj[i]);
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 /* ================================================================== */
 /* Primitives                                                          */
 /* ================================================================== */
 
-function drawArrow(
+export function drawArrow(
   ctx: CanvasRenderingContext2D,
   from: [number, number],
   to: [number, number],
@@ -633,7 +1270,7 @@ function drawArrow(
   ctx.restore();
 }
 
-function drawLabel(
+export function drawLabel(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
@@ -698,7 +1335,8 @@ function drawLabel(
 function Hint() {
   return (
     <div className="viewport-hint">
-      drag the amber tip to move <b>x</b> · scroll to zoom · drag background to pan
+      drag the amber tip to move <b>x</b> · scroll to zoom · drag background to pan ·
+      scrub the bar below to watch the morph
     </div>
   );
 }
