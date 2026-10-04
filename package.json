@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "esbuild src/math/matrix.ts src/math/eigen.ts src/math/pca.ts src/math/blocks.ts src/math/lerp.ts --outdir=.test-build --format=esm --bundle --external:ml-matrix --log-level=warning && node tests/math.test.mjs",
+    "test": "esbuild src/math/matrix.ts src/math/eigen.ts src/math/pca.ts src/math/blocks.ts src/math/lerp.ts src/math/equations.ts --outdir=.test-build --format=esm --bundle --external:ml-matrix --log-level=warning && node tests/math.test.mjs",
     "shots": "node scripts/screenshot.mjs",
     "check:dev": "node scripts/dev-check.mjs"
   },

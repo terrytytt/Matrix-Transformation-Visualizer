@@ -58,6 +58,7 @@ import {
 } from '../.test-build/blocks.js';
 
 import { blendFromIdentity, easeInOutCubic } from '../.test-build/lerp.js';
+import { BLOCK_VARS, chainEquations, rowEquation, systemEquations } from '../.test-build/equations.js';
 
 let fails = 0;
 const ok = (label, cond, extra = '') => {
@@ -521,6 +522,81 @@ ok('blend clamps past the ends (t=2 → M, t=−1 → I)',
     matNear(blendFromIdentity(tA, -1), identity(2), 1e-12));
 ok('easeInOutCubic(0) = 0, (0.5) = 1/2, (1) = 1',
   near(easeInOutCubic(0), 0) && near(easeInOutCubic(0.5), 0.5) && near(easeInOutCubic(1), 1));
+
+// Equation mode: the map y = M x printed as equations of a generic x.
+console.log('\nequations (generic x)');
+ok('row: basic 2×2',
+  rowEquation([2, 3], 0) === 'y₁ = 2x₁ + 3x₂', JSON.stringify(rowEquation([2, 3], 0)));
+ok('row: negative leading coefficient',
+  rowEquation([-1.5, 0.25], 1) === 'y₂ = − 1.5x₁ + 0.25x₂',
+  JSON.stringify(rowEquation([-1.5, 0.25], 1)));
+ok('row: zero term dropped, sign kept',
+  rowEquation([2, 0, -4], 2) === 'y₃ = 2x₁ − 4x₃', JSON.stringify(rowEquation([2, 0, -4], 2)));
+ok('row: ±1 coefficient elided',
+  rowEquation([1, -1], 0) === 'y₁ = x₁ − x₂', JSON.stringify(rowEquation([1, -1], 0)));
+ok('row: all-zero row → y = 0',
+  rowEquation([0, 0], 1) === 'y₂ = 0', JSON.stringify(rowEquation([0, 0], 1)));
+ok('row: rounding at 4 decimals, sub-precision dropped',
+  rowEquation([1 / 3, 0.00004], 0) === 'y₁ = 0.3333x₁',
+  JSON.stringify(rowEquation([1 / 3, 0.00004], 0)));
+ok('system: one equation per row',
+  systemEquations([[1, 2], [3, 4]]).length === 2 &&
+    systemEquations([[1, 2], [3, 4]])[1] === 'y₂ = 3x₁ + 4x₂',
+  JSON.stringify(systemEquations([[1, 2], [3, 4]])));
+ok('row: custom variable labels',
+  rowEquation([1, 2], 0, { out: 'p' }) === 'p₁ = x₁ + 2x₂',
+  JSON.stringify(rowEquation([1, 2], 0, { out: 'p' })));
+
+const eqA = [[2, 1], [1, 3]];
+const eqB = [[1, -1], [0, 2]];
+const eqChain = chainEquations(eqA, eqB);
+ok('chain: first hop reads off B',
+  eqChain.first[0] === 'p₁ = x₁ − x₂' && eqChain.first[1] === 'p₂ = 2x₂',
+  JSON.stringify(eqChain.first));
+ok('chain: second hop reads off A in p variables',
+  eqChain.second[0] === 'y₁ = 2p₁ + p₂' && eqChain.second[1] === 'y₂ = p₁ + 3p₂',
+  JSON.stringify(eqChain.second));
+// The invariant: expanding y = A(Bx) must give exactly A·B's entries.
+const AB = matMul(eqA, eqB);
+ok('chain: composed coefficients = entries of A·B',
+  systemEquations(AB)[0] === eqChain.composed[0] && systemEquations(AB)[1] === eqChain.composed[1],
+  JSON.stringify({ composed: eqChain.composed, AB: systemEquations(AB) }));
+ok('chain: substituted line joins both readings',
+  eqChain.substituted[0] === 'y₁ = 2p₁ + p₂ = 2x₁',
+  JSON.stringify(eqChain.substituted));
+// And numerically: substituting a concrete x through the chain lands on A(Bx).
+{
+  const x = [0.7, -1.3];
+  const p = matVec(eqB, x);
+  const viaChain = eqA.map((row) => row.reduce((s, a, j) => s + a * p[j], 0));
+  const direct = matVec(eqA, matVec(eqB, x));
+  ok('chain: y = A(Bx) numerically',
+    viaChain.every((v, i) => near(v, direct[i], 1e-12)), JSON.stringify({ viaChain, direct }));
+}
+ok('chain: works for 3×3 too',
+  chainEquations(A3, B3).composed.length === 3 &&
+    chainEquations(A3, B3).composed[0] === systemEquations(matMul(A3, B3))[0],
+  JSON.stringify(chainEquations(A3, B3).composed[0]));
+
+// The 4×4 block view reads the input's components as x, y, u, v.
+{
+  const M4 = [[1, 2, 0, 1], [0, 1, 1, 0], [2, 0, 1, 1], [0, 1, 0, 1]];
+  const N4 = [[1, 0, 1, 0], [0, 2, 0, 1], [1, 1, 0, 0], [0, 0, 1, 1]];
+  const rows = systemEquations(M4, { vars: BLOCK_VARS });
+  ok('block: system rows read in x, y, u, v',
+    rows[0] === 'y₁ = x + 2y + v' && rows[1] === 'y₂ = y + u',
+    JSON.stringify(rows));
+  const ch4 = chainEquations(M4, N4, BLOCK_VARS);
+  ok('block: first hop reads N against x, y, u, v',
+    ch4.first[0] === 'p₁ = x + u' && ch4.first[1] === 'p₂ = 2y + v',
+    JSON.stringify(ch4.first));
+  // Same invariant as the 2×2 chain: expanded rows = entries of M·N.
+  const MN = matMul(M4, N4);
+  ok('block: composed = entries of M·N in x, y, u, v',
+    systemEquations(MN, { vars: BLOCK_VARS })[0] === ch4.composed[0] &&
+      systemEquations(MN, { vars: BLOCK_VARS })[3] === ch4.composed[3],
+    JSON.stringify(ch4.composed));
+}
 
 console.log(fails === 0 ? '\n✓ all math checks passed\n' : `\n✗ ${fails} check(s) failed\n`);
 process.exit(fails ? 1 : 0);

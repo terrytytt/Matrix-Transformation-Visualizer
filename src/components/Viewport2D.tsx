@@ -18,6 +18,7 @@ import {
 } from '../math/matrix';
 import { MatrixTween, blendFromIdentity } from '../math/lerp';
 import { EigenEntry, eigen, ellipseAxes, realEigenpairs, symmetricBasis } from '../math/eigen';
+import { EquationOverlay } from './EquationOverlay';
 
 export interface View {
   /** pixels per world unit */
@@ -44,6 +45,8 @@ const COLORS = {
   transpose: 'rgba(250, 204, 21, 0.34)',
   ellipse: '#e879f9',
   circle: 'rgba(203, 213, 225, 0.55)',
+  /** Composition chain: the hop B produced, in matrix B's accent. */
+  chainB: '#a78bfa',
   levelSets: '#2dd4bf',
   // Sign-field ramp: warm (positive) → cool (negative), as [r,g,b].
   formWarm: [251, 191, 36],
@@ -77,6 +80,10 @@ export function Viewport2D() {
   const transT = useApp((s) => s.transT);
   const ghostAlways = useApp((s) => s.ghostAlways);
   const splitView = useApp((s) => s.splitView);
+  const compActive = useApp((s) => s.compActive);
+  const compStep = useApp((s) => s.compStep);
+  const matrixB = useApp((s) => s.matrixB);
+  const eqMode = useApp((s) => s.eqMode);
 
   const view = useRef<View>({ scale: 44, ox: 0, oy: 0 });
   const tween = useRef<MatrixTween | null>(null);
@@ -95,6 +102,7 @@ export function Viewport2D() {
     vector,
     layers,
     A,
+    B: matrixB,
     decomp,
     decompStep,
     decompFacts,
@@ -103,12 +111,16 @@ export function Viewport2D() {
     transT,
     ghostAlways,
     splitView,
+    compActive,
+    compStep,
+    eqMode,
   });
   latest.current = {
     M: targetMatrix,
     vector,
     layers,
     A,
+    B: matrixB,
     decomp,
     decompStep,
     decompFacts,
@@ -117,6 +129,9 @@ export function Viewport2D() {
     transT,
     ghostAlways,
     splitView,
+    compActive,
+    compStep,
+    eqMode,
   };
 
   // Lazily initialised on the first frame so the tween starts settled.
@@ -329,7 +344,26 @@ export function Viewport2D() {
       if (ly.columnSpace) drawColumnSpace(ctx, derivedRef.current, vl, toScreen);
       if (ly.nullSpace) drawNullSpace(ctx, derivedRef.current, vl, toScreen);
       if (ly.basis) drawBasis(ctx, M, vl, toScreen);
-      if (ly.vector) drawVectorPair(ctx, M, now.vector, vl, toScreen);
+      if (ly.vector) {
+        if (now.compActive) {
+          // Composition: draw the whole hop chain from the exact matVec
+          // results — the arrows are the destination, the grid is the
+          // journey it tweens along. The "before" half shows only step 0.
+          drawVectorChain(
+            ctx,
+            now.A,
+            now.B,
+            now.vector,
+            before ? 0 : now.compStep,
+            now.eqMode,
+            toScreen,
+          );
+        } else {
+          // The before half draws at identity, so its equation label names I;
+          // everywhere else the label follows the drawn map.
+          drawVectorPair(ctx, M, now.vector, vl, toScreen, now.eqMode, before ? 'I' : now.M.label);
+        }
+      }
 
       // PCA datasets: ease the cloud between its per-step targets (raw →
       // centered → transformed by the step matrix), then draw the 1σ/2σ
@@ -387,6 +421,24 @@ export function Viewport2D() {
             [4, 3],
           );
         }
+        // Composition step 2: pin the B-image ghost — the violet lattice and
+        // unit square where the picture sat after the first hop — so the
+        // second hop reads as motion *away* from it. Part of the demo, so it
+        // ignores ghostAlways / the transition scrubber.
+        if (now.compActive && now.compStep === 2) {
+          if (ly.grid) {
+            drawImageGrid(ctx, rect.w, rect.h, vl, now.B, toScreen, 'rgba(167, 139, 250, 0.34)', [3, 4]);
+          }
+          if (ly.determinant) {
+            drawSquareOutline(
+              ctx,
+              ([[0, 0], [1, 0], [1, 1], [0, 1]] as Vector[]).map((c) => matVec(now.B, c)),
+              toScreen,
+              'rgba(167, 139, 250, 0.75)',
+              [6, 4],
+            );
+          }
+        }
         if (dest) {
           if (ly.grid) {
             drawImageGrid(ctx, rect.w, rect.h, vl, dest, toScreen, 'rgba(96, 165, 250, 0.34)', [3, 4]);
@@ -404,7 +456,7 @@ export function Viewport2D() {
             drawArrow(ctx, toScreen([0, 0]), toScreen(matVec(dest, [1, 0])), COLORS.e1, 1.6, [4, 4], 0.5);
             drawArrow(ctx, toScreen([0, 0]), toScreen(matVec(dest, [0, 1])), COLORS.e2, 1.6, [4, 4], 0.5);
           }
-          if (ly.vector) {
+          if (ly.vector && !now.compActive) {
             drawArrow(ctx, toScreen([0, 0]), toScreen(matVec(dest, now.vector)), COLORS.vec, 1.6, [5, 4], 0.5);
           }
         }
@@ -462,7 +514,10 @@ export function Viewport2D() {
       if (now.splitView) {
         const lw = Math.floor(W / 2);
         drawPass({ x: 0, y: 0, w: lw, h: H, tag: 'before' }, v.ox - W / 2, identity(2), null);
-        drawPass({ x: lw, y: 0, w: W - lw, h: H, tag: 'after' }, v.ox, M, t < 1 ? base : null);
+        // The after pass is translated by lw, so its world origin must be
+        // given in that local frame — passing v.ox here double-shifted every
+        // vector/basis/det draw off the right edge of the canvas.
+        drawPass({ x: lw, y: 0, w: W - lw, h: H, tag: 'after' }, v.ox - lw, M, t < 1 ? base : null);
 
         ctx.save();
         ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
@@ -484,6 +539,7 @@ export function Viewport2D() {
   return (
     <div className="viewport viewport-2d" ref={wrapRef}>
       <canvas ref={canvasRef} aria-label="2D transformation visualisation" />
+      <EquationOverlay />
       <Hint />
     </div>
   );
@@ -880,14 +936,118 @@ function drawVectorPair(
   x: Vector,
   v: View,
   toScreen: (p: Vector) => [number, number],
+  eq = false,
+  label = 'A',
 ) {
   const image = matVec(M, x);
   drawArrow(ctx, toScreen([0, 0]), toScreen(x), COLORS.vec, 1.8, [5, 4], 0.85);
-  drawLabel(ctx, ...toScreen(x), 'x', COLORS.vec, 'left', 11, 12);
+  // Equation mode swaps the numeric tips for the generic reading: this
+  // arrow is the point x = (x₁, x₂), the image is the map applied to it.
+  drawLabel(ctx, ...toScreen(x), eq ? 'x = (x₁, x₂)' : 'x', COLORS.vec, 'left', 11, 12);
   drawArrow(ctx, toScreen([0, 0]), toScreen(image), COLORS.vec, 3, [], 1);
-  drawLabel(ctx, ...toScreen(image), 'Ax', COLORS.vec, 'left', 8, -11);
+  drawLabel(ctx, ...toScreen(image), eq ? `y = ${label} x` : 'Ax', COLORS.vec, 'left', 8, -11);
 
   // draggable handle
+  const [hx, hy] = toScreen(x);
+  ctx.beginPath();
+  ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+  ctx.fillStyle = COLORS.vec;
+  ctx.fill();
+  ctx.strokeStyle = '#0b1020';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+/** Dashed connector between two arrow tips — the path a point travelled. */
+function drawHop(
+  ctx: CanvasRenderingContext2D,
+  from: [number, number],
+  to: [number, number],
+  color: string,
+) {
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.7;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(from[0], from[1]);
+  ctx.lineTo(to[0], to[1]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Composition demo chain: x → Bx → A(Bx), drawn from the exact matVec
+ * results while the grid tweens between steps — each arrow marks where its
+ * hop *ends*, so "transforming twice" reads from a single picture.
+ *
+ * Colour follows the hop: amber x (faint, dimming as the chain grows),
+ * matrix B's violet for Bx, amber again for the final image — the same
+ * colour the single-map view gives "the image of x". Dashed connectors run
+ * tip to tip, each in its destination's colour.
+ */
+function drawVectorChain(
+  ctx: CanvasRenderingContext2D,
+  A: Matrix,
+  B: Matrix,
+  x: Vector,
+  step: 0 | 1 | 2,
+  eq: boolean,
+  toScreen: (p: Vector) => [number, number],
+) {
+  const p = matVec(B, x);
+  const y = matVec(A, p);
+  const nums = (w: Vector) => `(${w.map(fmtNum).join(', ')})`;
+  const xAlpha = step === 0 ? 0.9 : step === 1 ? 0.55 : 0.4;
+
+  // Hop lines first so the arrows sit on top of them.
+  if (step >= 1) drawHop(ctx, toScreen(x), toScreen(p), COLORS.chainB);
+  if (step >= 2) drawHop(ctx, toScreen(p), toScreen(y), COLORS.vec);
+
+  // x — always the anchor, staying draggable at its tip.
+  drawArrow(ctx, toScreen([0, 0]), toScreen(x), COLORS.vec, 1.8, [5, 4], xAlpha);
+  drawLabel(
+    ctx,
+    ...toScreen(x),
+    eq ? 'x = (x₁, x₂)' : `x = ${nums(x)}`,
+    COLORS.vec,
+    'left',
+    11,
+    12,
+    xAlpha,
+  );
+
+  if (step >= 1) {
+    // At step 1 the result is still "the answer" (y = B x); by step 2 it
+    // has become the input of the next hop (p = B x).
+    drawArrow(ctx, toScreen([0, 0]), toScreen(p), COLORS.chainB, 2.6, [], step === 1 ? 1 : 0.85);
+    drawLabel(
+      ctx,
+      ...toScreen(p),
+      eq ? (step === 1 ? 'y = B x' : 'p = B x') : `Bx = ${nums(p)}`,
+      COLORS.chainB,
+      'left',
+      8,
+      -11,
+      step === 1 ? 1 : 0.9,
+    );
+  }
+
+  if (step === 2) {
+    drawArrow(ctx, toScreen([0, 0]), toScreen(y), COLORS.vec, 3, [], 1);
+    drawLabel(
+      ctx,
+      ...toScreen(y),
+      eq ? 'y = A p' : `A(Bx) = ${nums(y)}`,
+      COLORS.vec,
+      'left',
+      8,
+      -11,
+    );
+  }
+
+  // draggable handle on x's tip — same hit-test as the single-map view
   const [hx, hy] = toScreen(x);
   ctx.beginPath();
   ctx.arc(hx, hy, 5, 0, Math.PI * 2);

@@ -376,6 +376,74 @@ try {
   await new Promise((r) => setTimeout(r, 1600));
   await setScrub(page, 50);
   await shot(page, '33-4d-transition-scrub');
+
+  // ---------------- feature 9: composition chain + equation mode --------
+  // Back to 2×2 with the morph settled and split off: the chain shows every
+  // hop of x → Bx → A(Bx) at once, drawn from the exact endpoints while the
+  // grid tweens, with the violet B-image lattice pinned where hop 1 left it.
+  await clickByText(page, '.seg', '2 × 2');
+  await new Promise((r) => setTimeout(r, 900));
+  await setScrub(page, 100);
+  const splitOn = await page.evaluate(() =>
+    [...document.querySelectorAll('.tb-toggle')].some(
+      (b) => b.textContent.includes('Split') && b.classList.contains('on'),
+    ),
+  );
+  if (splitOn) await clickByText(page, '.tb-toggle', 'Split');
+
+  await clickByText(page, '.chip', 'Composition');
+  await clickByText(page, 'button', 'Start demo');
+  await clickByText(page, '.step', 'A·B');
+  await new Promise((r) => setTimeout(r, 900));
+  await shot(page, '34-2d-comp-chain');
+
+  // equation mode: the same chain read as p = B x → y = A p, shown on the
+  // canvas tips and in the InfoPanel card + viewport overlay.
+  await clickByText(page, 'button', 'Show as equations');
+  await new Promise((r) => setTimeout(r, 400));
+  await shot(page, '35-2d-comp-equations');
+
+  // outside the demo the equations follow the drawn map (y = A x here)
+  await clickByText(page, 'button', 'Exit');
+  await new Promise((r) => setTimeout(r, 500));
+  await shot(page, '36-2d-equations');
+
+  // split view: the overlay rides over the "after · live" half
+  await clickByText(page, '.tb-toggle', 'Split');
+  await new Promise((r) => setTimeout(r, 600));
+  await shot(page, '37-2d-equations-split');
+
+  // ---------------- feature 9 phase 2: 3D and 4×4 ------------------------
+  // Leave split for the 3D chain (it reads best full-canvas); equation mode
+  // is a sticky preference and stays on from the shots above.
+  await clickByText(page, '.tb-toggle', 'Split');
+  await clickByText(page, '.seg', '3 × 3');
+  await Promise.race([
+    page.waitForSelector('.viewport-3d-host canvas', { timeout: 15000 }),
+    page.waitForSelector('.viewport-fallback', { timeout: 15000 }),
+  ]);
+  await new Promise((r) => setTimeout(r, 1800));
+  const has3d9 = await page.$('.viewport-3d-host canvas');
+  if (has3d9) {
+    await clickByText(page, '.chip', 'Composition');
+    await clickByText(page, 'button', 'Start demo');
+    await clickByText(page, '.step', 'A·B');
+    await new Promise((r) => setTimeout(r, 900));
+    await shot(page, '38-3d-comp-equations');
+  }
+
+  // 4×4: the same sticky equation mode, now component rows over x, y, u, v —
+  // the block view takes them in the panel card, with no floating overlay.
+  await clickByText(page, '.seg', '4 × 4');
+  await new Promise((r) => setTimeout(r, 1600));
+  await shot(page, '39-4d-equations');
+
+  // and the 4×4 composition chain, read in N-then-M naming.
+  await clickByText(page, '.chip', 'Composition');
+  await clickByText(page, 'button', 'Start demo');
+  await clickByText(page, '.step', 'M·N');
+  await new Promise((r) => setTimeout(r, 900));
+  await shot(page, '40-4d-comp-equations');
 } catch (err) {
   problems.push('script: ' + err.message);
 }

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useApp, Decomp } from '../state/store';
 import { DecompFacts, useActiveMatrix, useDataFacts, useDecompFacts } from '../state/hooks';
+import { EquationOverlay } from './EquationOverlay';
 import {
   Matrix,
   Vector,
@@ -36,6 +37,8 @@ const C = {
   detFlat: 0x64748b,
   basis: [0xf87171, 0x4ade80, 0x60a5fa],
   vec: 0xfbbf24,
+  /** Composition chain: the hop B produced, in matrix B's accent. */
+  chainB: 0xa78bfa,
   eigen: [0xc084fc, 0xf472b6, 0x818cf8],
   nullSpace: 0xfb923c,
   colSpace: 0x22d3ee,
@@ -276,6 +279,10 @@ export function Viewport3D() {
   const dataFacts = useDataFacts(dataset);
   const transT = useApp((s) => s.transT);
   const splitView = useApp((s) => s.splitView);
+  const compActive = useApp((s) => s.compActive);
+  const compStep = useApp((s) => s.compStep);
+  const B = useApp((s) => s.matrixB);
+  const eqMode = useApp((s) => s.eqMode);
 
   const derived = useMemo(
     () => {
@@ -299,6 +306,7 @@ export function Viewport3D() {
     vector,
     layers,
     A,
+    B,
     derived,
     decomp,
     decompStep,
@@ -307,12 +315,16 @@ export function Viewport3D() {
     dataFacts,
     transT,
     splitView,
+    compActive,
+    compStep,
+    eqMode,
   });
   live.current = {
     active,
     vector,
     layers,
     A,
+    B,
     derived,
     decomp,
     decompStep,
@@ -321,6 +333,9 @@ export function Viewport3D() {
     dataFacts,
     transT,
     splitView,
+    compActive,
+    compStep,
+    eqMode,
   };
 
   useEffect(() => {
@@ -440,6 +455,25 @@ export function Viewport3D() {
     );
     destCubeMesh.visible = false;
     scene.add(destCubeMesh);
+
+    /* ---- composition ghost: the B-image lattice where hop 1 landed ---- */
+    const bGridGeom = new THREE.BufferGeometry();
+    bGridGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(baseGrid.length), 3));
+    const bGridMesh = new THREE.LineSegments(
+      bGridGeom,
+      new THREE.LineBasicMaterial({ color: C.chainB, transparent: true, opacity: 0.34 }),
+    );
+    bGridMesh.visible = false;
+    scene.add(bGridMesh);
+
+    const bCubeGeom = new THREE.BufferGeometry();
+    bCubeGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cubeBase.length), 3));
+    const bCubeMesh = new THREE.LineSegments(
+      bCubeGeom,
+      new THREE.LineBasicMaterial({ color: C.chainB, transparent: true, opacity: 0.75 }),
+    );
+    bCubeMesh.visible = false;
+    scene.add(bCubeMesh);
 
     /* ---------------- determinant volume ---------------- */
     const solidGeom = unitCubeSolid();
@@ -585,6 +619,30 @@ export function Viewport3D() {
     const vecImg = mkArrow(C.vec);
     scene.add(vecImg);
 
+    /* ---- composition chain: the violet Bx hop and its connectors ---- */
+    const vecBx = mkArrow(C.chainB);
+    (vecBx.line.material as THREE.Material).transparent = true;
+    (vecBx.line.material as THREE.Material).opacity = 0.85;
+    (vecBx.cone.material as THREE.Material).transparent = true;
+    (vecBx.cone.material as THREE.Material).opacity = 0.9;
+    vecBx.visible = false;
+    scene.add(vecBx);
+
+    /** One dashed-in-2D tip-to-tip hop, drawn solid here (the residual convention). */
+    const mkHop = (color: number) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      const m = new THREE.LineSegments(
+        g,
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 }),
+      );
+      m.visible = false;
+      scene.add(m);
+      return m;
+    };
+    const hop1 = mkHop(C.chainB);
+    const hop2 = mkHop(C.vec);
+
     const eigenArrows = [0, 1, 2].map((i) => {
       const orig = mkArrow(C.eigen[i]);
       const img = mkArrow(C.eigen[i]);
@@ -712,6 +770,7 @@ export function Viewport3D() {
     const basisImgLabels = [0, 1, 2].map((i) => new Label3D(C.basis[i], 0.33));
     const vecLabel = new Label3D(C.vec, 0.3);
     const vecImgLabel = new Label3D(C.vec, 0.38);
+    const vecBxLabel = new Label3D(C.chainB, 0.34);
     const eigenLabels = [0, 1, 2].map((i) => new Label3D(C.eigen[i], 0.33));
     const sigmaLabels = [0, 1, 2].map(() => new Label3D(C.ellipse, 0.33));
     const decompLabels = [0, 1, 2].map(() => new Label3D(C.decomp, 0.33));
@@ -720,6 +779,7 @@ export function Viewport3D() {
       ...basisImgLabels,
       vecLabel,
       vecImgLabel,
+      vecBxLabel,
       ...eigenLabels,
       ...sigmaLabels,
       ...decompLabels,
@@ -770,6 +830,11 @@ export function Viewport3D() {
         vector: vec,
         layers: ly,
         A: Amat,
+        B: bMat,
+        compActive: ca,
+        compStep: cs,
+        eqMode: eq,
+        active: act,
         derived: dr,
         decomp: dc,
         decompStep: ds,
@@ -805,6 +870,22 @@ export function Viewport3D() {
       if (dest && destCubeMesh.visible) {
         applyMatrixToPositions(dest, cubeBase, posArr(destCubeGeom));
         markDirty(destCubeGeom);
+      }
+
+      // Composition step 2: pin the B-image ghost — the violet lattice and
+      // cube where the picture sat after hop 1 — so hop 2 reads as motion
+      // *away* from it. Part of the demo, so it ignores ghostAlways and the
+      // transition scrubber (the 2D view does the same).
+      const showBGhost = ca && cs === 2 && !before;
+      bGridMesh.visible = showBGhost && ly.grid;
+      if (showBGhost && ly.grid) {
+        applyMatrixToPositions(bMat, baseGrid, posArr(bGridGeom));
+        markDirty(bGridGeom);
+      }
+      bCubeMesh.visible = showBGhost && ly.determinant;
+      if (showBGhost && ly.determinant) {
+        applyMatrixToPositions(bMat, cubeBase, posArr(bCubeGeom));
+        markDirty(bCubeGeom);
       }
 
       const d = det(M);
@@ -846,23 +927,73 @@ export function Viewport3D() {
         }
       }
 
-      // vector
-      const imageVec = matVec(M, vec);
+      // vector — the composition demo draws the whole hop chain from the
+      // exact matVec results while the grid tweens between steps, mirroring
+      // the 2D chain: amber x (dimming as the chain grows), violet Bx, and
+      // the final A(Bx) in the usual image colour. The "before" half shows
+      // only step 0 — the input.
+      const step = ca ? (before ? 0 : cs) : -1;
+      const xAlpha = ca ? (step === 0 ? 0.9 : step === 1 ? 0.55 : 0.4) : 0.45;
+      (vecOrig.line.material as THREE.Material).opacity = xAlpha;
+      (vecOrig.cone.material as THREE.Material).opacity = ca ? xAlpha : 0.5;
       setArrow(vecOrig, [vec[0], vec[1], vec[2] ?? 0], norm(vec), ly.vector);
-      setArrow(vecImg, [imageVec[0], imageVec[1], imageVec[2] ?? 0], norm(imageVec), ly.vector && !before);
       vecLabel.sprite.visible = ly.vector;
-      vecImgLabel.sprite.visible = ly.vector && !before && norm(imageVec) > 1e-6;
       if (ly.vector) {
         vecLabel.set(
           'x',
           new THREE.Vector3(vec[0], vec[1], vec[2] ?? 0).add(new THREE.Vector3(0.15, 0.25, 0)),
         );
+      }
+
+      const pHop = ca ? matVec(bMat, vec) : null; // hop 1 — exact, untweened
+      const yHop = ca ? matVec(Amat, pHop!) : null; // hop 2 — exact
+      const bxVec: Vector = pHop ?? [0, 0, 0];
+
+      // violet Bx — still the answer at step 1, already the input of hop 2
+      // by step 2 (its label follows that reading, like the 2D tips).
+      const showBx = ly.vector && step >= 1;
+      setArrow(vecBx, bxVec, norm(bxVec), showBx);
+      vecBxLabel.sprite.visible = showBx && norm(bxVec) > 1e-6;
+      if (showBx && norm(bxVec) > 1e-6) {
+        (vecBx.line.material as THREE.Material).opacity = step === 1 ? 1 : 0.85;
+        (vecBx.cone.material as THREE.Material).opacity = step === 1 ? 1 : 0.9;
+        vecBxLabel.set(
+          eq ? (step === 1 ? 'y = B x' : 'p = B x') : 'Bx',
+          new THREE.Vector3(bxVec[0], bxVec[1], bxVec[2]).add(new THREE.Vector3(0.15, 0.25, 0)),
+        );
+      }
+
+      // the image arrow: the single-map image, or the chain's final hop
+      const imageVec: Vector = ca ? yHop! : matVec(M, vec);
+      const showImg = ly.vector && !before && (!ca || step === 2);
+      setArrow(vecImg, [imageVec[0], imageVec[1], imageVec[2] ?? 0], norm(imageVec), showImg);
+      vecImgLabel.sprite.visible = showImg && norm(imageVec) > 1e-6;
+      if (showImg && norm(imageVec) > 1e-6) {
         vecImgLabel.set(
-          'Ax',
+          ca ? (eq ? 'y = A p' : 'A(Bx)') : eq ? `y = ${act.label} x` : 'Ax',
           new THREE.Vector3(imageVec[0], imageVec[1], imageVec[2] ?? 0).add(
             new THREE.Vector3(0.15, 0.25, 0),
           ),
         );
+      }
+
+      // tip-to-tip hops: the path each point travelled (solid in 3D, where
+      // the 2D view dashes them).
+      const hop1Show = ly.vector && step >= 1;
+      hop1.visible = hop1Show;
+      if (hop1Show && pHop) {
+        const a = posArr(hop1.geometry);
+        a[0] = vec[0]; a[1] = vec[1]; a[2] = vec[2] ?? 0;
+        a[3] = pHop[0]; a[4] = pHop[1]; a[5] = pHop[2] ?? 0;
+        markDirty(hop1.geometry);
+      }
+      const hop2Show = ly.vector && step === 2;
+      hop2.visible = hop2Show;
+      if (hop2Show && pHop && yHop) {
+        const a = posArr(hop2.geometry);
+        a[0] = pHop[0]; a[1] = pHop[1]; a[2] = pHop[2] ?? 0;
+        a[3] = yHop[0]; a[4] = yHop[1]; a[5] = yHop[2] ?? 0;
+        markDirty(hop2.geometry);
       }
 
       // travel streaks: the straight path each tracked tip has covered so
@@ -1235,6 +1366,7 @@ export function Viewport3D() {
   return (
     <div className="viewport viewport-3d">
       <div ref={hostRef} className="viewport-3d-host" aria-label="3D transformation visualisation" />
+      <EquationOverlay />
       {glError && (
         <div className="viewport-fallback" role="alert">
           <strong>3D view unavailable</strong>

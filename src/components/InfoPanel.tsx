@@ -16,6 +16,7 @@ import {
   symmetricPart,
 } from '../math/matrix';
 import { Definiteness, definiteness, eigen, singularValues } from '../math/eigen';
+import { useEquationBlocks } from './EquationOverlay';
 import {
   BLOCK_COLORS,
   blockProducts,
@@ -135,6 +136,9 @@ export function InfoPanel() {
   const vector = useApp((s) => s.vector);
   const showInverse = useApp((s) => s.showInverse);
   const compActive = useApp((s) => s.compActive);
+  const eqMode = useApp((s) => s.eqMode);
+  const toggleEqMode = useApp((s) => s.toggleEqMode);
+  const eqBlocks = useEquationBlocks();
   const idemActive = useApp((s) => s.idemActive);
   const decomp = useApp((s) => s.decomp);
   const presetName = useApp((s) => s.presetName);
@@ -147,6 +151,8 @@ export function InfoPanel() {
   const blockFacts = useBlockFacts(A);
   /** What this panel calls the main matrix: M in the 4×4 block view. */
   const nm = dim === 4 ? 'M' : 'A';
+  /** Input component names the equation card prints: x₁ … xₙ. */
+  const eqVars = Array.from({ length: dim }, (_, i) => `x${['₁', '₂', '₃', '₄'][i]}`).join(', ');
 
   const bf = blockFacts;
   const defA = useMemo(() => (bf ? definiteness(bf.blocks.A) : null), [bf]);
@@ -293,7 +299,34 @@ export function InfoPanel() {
             </span>
             .
           </p>
+          <button
+            type="button"
+            className={eqMode ? 'btn btn-toggle on' : 'btn btn-toggle'}
+            onClick={toggleEqMode}
+            aria-pressed={eqMode}
+          >
+            {eqMode ? 'Hide equations' : 'Show as equations'}
+          </button>
         </section>
+
+        {eqBlocks && (
+          <section className="card">
+            <h2 className="card-title">The map as equations</h2>
+            {eqBlocks.map((b) => (
+              <div className="eq-block" key={b.title}>
+                <span className="eq-title mono">{b.title}</span>
+                <pre className="matrix-readout">{b.rows.join('\n')}</pre>
+              </div>
+            ))}
+            <p className="muted small">
+              {compActive
+                ? `The second block is the first one with p = ${dim === 4 ? 'N' : 'B'} x substituted in — the entries of the product emerge by plugging one linear map into the other.`
+                : dim === 4
+                  ? 'These hold for the generic point x = (x, y, u, v): the four rows produce the output components y₁ … y₄, and every vector obeys them — not just the amber inputs.'
+                  : `These hold for the generic point x = (${eqVars}): every vector obeys them, not just the amber one on the grid.`}
+            </p>
+          </section>
+        )}
 
         {/* -------------------------------- checks ---------------------------- */}
         <h3 className="group-header" id="grp-checks">

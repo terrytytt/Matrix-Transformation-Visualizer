@@ -87,12 +87,20 @@ export interface AppState {
   ghostAlways: boolean;
   /** Side-by-side before | after viewport (2D and 3D). */
   splitView: boolean;
+  /**
+   * Equation mode: show the map as equations of a *generic* x
+   * (y₁ = 2x₁ + 3x₂ …) in the info card and as a viewport overlay,
+   * instead of only the numeric readouts. A display preference like
+   * ghostAlways — survives resets and preset changes.
+   */
+  eqMode: boolean;
 
   setTransT: (t: number) => void;
   playTransition: () => void;
   pauseTransition: () => void;
   toggleGhost: () => void;
   toggleSplit: () => void;
+  toggleEqMode: () => void;
 
   setDim: (d: Dim) => void;
   setMatrix: (M: Matrix) => void;
@@ -244,6 +252,7 @@ export const useApp = create<AppState>((set, get) => ({
   transPlaying: false,
   ghostAlways: false,
   splitView: false,
+  eqMode: false,
 
   setDim: (d) => {
     if (get().dim === d) return;
@@ -353,6 +362,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
   toggleGhost: () => set((s) => ({ ghostAlways: !s.ghostAlways })),
   toggleSplit: () => set((s) => ({ splitView: !s.splitView })),
+  // A display preference: deliberately not touched by setDim / reset /
+  // applyMatrices — the user's chosen readout style sticks.
+  toggleEqMode: () => set((s) => ({ eqMode: !s.eqMode })),
 
   applyMatrices: (A, B, x, name) =>
     set({

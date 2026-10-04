@@ -583,6 +583,31 @@ pre {
   white-space: pre;
 }
 
+/* Equation mode: the map written as rows of a generic x — shared by the
+   InfoPanel card and the viewport overlay. */
+.eq-block {
+  margin-top: 10px;
+}
+
+.eq-block:first-of-type {
+  margin-top: 4px;
+}
+
+.eq-title {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--accent-v);
+}
+
+.eq-rows {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: #cfe0f7;
+  white-space: pre-wrap;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -732,6 +757,40 @@ pre {
 .viewport-hint b {
   color: var(--accent-v);
   font-weight: 650;
+}
+
+/* Equation mode's viewport twin: the same rows the InfoPanel card shows,
+   floating over the canvas (top-left; over the "after" half in split view).
+   Never interactive — the grid stays draggable underneath. */
+.eq-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  max-width: min(360px, calc(100% - 24px));
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: rgba(8, 12, 22, 0.84);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.eq-overlay-split {
+  left: calc(50% + 10px);
+  top: 40px;
+}
+
+.eq-overlay .eq-block {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+}
+
+.eq-overlay .eq-block:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .viewport-controls {

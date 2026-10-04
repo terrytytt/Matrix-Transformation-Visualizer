@@ -83,6 +83,7 @@ function Legend({
   decomp: Decomp | null;
   dataset: Dataset | null;
 }) {
+  const compActive = useApp((s) => s.compActive);
   const items: Array<{ color: string; label: string; dashed?: boolean; glow?: string }> = [];
   if (dim === 4) {
     // Two-plane view: colors follow the four blocks of M = [A B; C D].
@@ -104,7 +105,16 @@ function Legend({
     items.push({ color: '#4ade80', label: 'e₂ → Ae₂' });
     if (dim === 3) items.push({ color: '#60a5fa', label: 'e₃ → Ae₃' });
   }
-  if (layers.vector) items.push({ color: '#fbbf24', label: 'x → Ax' });
+  if (layers.vector) {
+    if (compActive) {
+      // The demo draws three arrows, so key all three colours: the dashed
+      // amber path and the violet hop-1 image the second hop departs from.
+      items.push({ color: '#fbbf24', dashed: true, label: 'x → Bx → A(Bx)' });
+      items.push({ color: '#a78bfa', label: 'Bx · first hop' });
+    } else {
+      items.push({ color: '#fbbf24', label: 'x → Ax' });
+    }
+  }
   if (layers.determinant) items.push({ color: '#22c55e', label: 'det region' });
   if (layers.eigen) items.push({ color: '#c084fc', label: 'eigenvector' });
   if (layers.columnSpace) items.push({ color: '#22d3ee', label: 'Col(A)' });
